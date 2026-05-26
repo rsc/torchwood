@@ -1,0 +1,446 @@
+// Copyright 2025 The Go Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style
+// license that can be found in the LICENSE file.
+
+package mpt
+
+import "fmt"
+
+// hash returns the hash for the given tree node.
+// pbit is the parent bit depth, controlling whether n is viewed as a leaf.
+func (n *diskNode) hash(t *diskTree, pbit int) (Hash, error) {
+	if n.bit() <= pbit {
+		key, val, err := n.keyVal(t)
+		if err != nil {
+			return Hash{}, err
+		}
+		return hashLeaf(key, val), nil
+	}
+	return n.ihash(), nil
+}
+
+var lazyHash = false
+
+// unhash marks n's hash invalid or recomputes it,
+// depending on the [lazyHash] setting.
+func (n *diskNode) unhash(t *diskTree, pbit int) error {
+	if !lazyHash {
+		_, err := n.rehash(t, pbit, true)
+		return err
+	}
+	if n.dirty() {
+		return nil
+	}
+	return n.setDirty(t, true)
+}
+
+// rehash updates n.hash if needed and then returns it.
+func (n *diskNode) rehash(t *diskTree, pbit int, force bool) (Hash, error) {
+	nbit := n.bit()
+	if nbit <= pbit {
+		return n.hash(t, pbit)
+	}
+	if n.dirty() || force {
+		left, err := t.node(n.left())
+		if err != nil {
+			return Hash{}, err
+		}
+		lhash, err := left.rehash(t, nbit, false)
+		if err != nil {
+			return Hash{}, err
+		}
+		right, err := t.node(n.right())
+		if err != nil {
+			return Hash{}, err
+		}
+		rhash, err := right.rehash(t, nbit, false)
+		if err != nil {
+			return Hash{}, err
+		}
+		if err := n.setIHash(t, hashInner(nbit, lhash, rhash)); err != nil {
+			return Hash{}, err
+		}
+		if err := n.setDirty(t, false); err != nil {
+			return Hash{}, err
+		}
+	}
+	return n.ihash(), nil
+}
+
+// Snap returns a snapshot of t.
+func (t *diskTree) Snap(version int64) (Snapshot, error) {
+	t.mmu.RLock()
+	defer t.mmu.RUnlock()
+
+	if err := t.snap(version); err != nil {
+		return Snapshot{}, err
+	}
+	// t.check()
+	return Snapshot{t.hdr().version(), t.hdr().hash()}, nil
+}
+
+func (t *diskTree) snap(version int64) error {
+	if t.err != nil {
+		return t.err
+	}
+	if t.hdr().dirty() {
+		// Note: Not using a mutation group because we might be
+		// updating arbitrarily many hashes during rehash.
+		// Without group, ordering matters: write hash before dirty
+		// and both before version.
+		root, err := t.node(t.hdr().root())
+		if err != nil {
+			return err
+		}
+		hash, err := root.rehash(t, -1, false)
+		if err != nil {
+			return err
+		}
+		if err := t.hdr().setHash(t, hash); err != nil {
+			return err
+		}
+		if err := t.hdr().setDirty(t, false); err != nil {
+			return err
+		}
+	}
+	if version >= 0 {
+		if err := t.hdr().setVersion(t, version); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Version returns version information about the tree.
+func (t *diskTree) Version() (version int64, exact bool) {
+	hdr := t.hdr()
+	return hdr.version(), hdr.exact()
+}
+
+// Set sets the value associated with key to val.
+func (t *diskTree) Set(key Key, val Val) error {
+	t.mmu.RLock()
+	defer t.mmu.RUnlock()
+
+	if t.err != nil {
+		return t.err
+	}
+
+	if t.hdr().exact() {
+		// Clear exact and flush to disk (in the memory files)
+		// before we make any writes to the disk leaf file,
+		// so that we know the disk leaf file may be ahead of the memory file.
+		if err := t.hdr().setExact(t, false); err != nil {
+			return err
+		}
+		if err := t.pmem.Sync(); err != nil {
+			return err
+		}
+	}
+
+	// Keep all writes for this Set in the same group.
+	// We write one node and the dirty field for log N nodes,
+	// so it fits easily in the mutation group limit.
+	t.pmem.BeginGroup()
+	defer t.pmem.EndGroup()
+
+	if !t.hdr().dirty() {
+		if err := t.hdr().setDirty(t, true); err != nil {
+			return err
+		}
+	}
+	if t.hdr().root() == 0 {
+		n, err := t.newNode()
+		if err != nil {
+			return err
+		}
+		n.init(t, key, val, 0, nil, nil)
+		if err := t.hdr().setRoot(t, n); err != nil {
+			return err
+		}
+	} else {
+		b, err := t.setChild(-1, hdrRoot, key, val)
+		if err != nil {
+			return err
+		}
+		if b >= 0 {
+			panic("bad add")
+		}
+		root, err := t.node(t.hdr().root())
+		if err != nil {
+			return err
+		}
+		if err := root.unhash(t, -1); err != nil {
+			return err
+		}
+	}
+	// t.check()
+	return nil
+}
+
+func (n *diskNode) set(t *diskTree, pbit int, key Key, val Val) (int, error) {
+	nbit := n.bit()
+	if nbit <= pbit {
+		// view n as leaf
+		nkey, _, err := n.keyVal(t)
+		if err != nil {
+			return 0, err
+		}
+		b := nkey.overlap(key)
+		if b == keyBits {
+			if err := n.setVal(t, val); err != nil {
+				return 0, err
+			}
+			return -1, nil
+		}
+		// Caller must create a node splitting at bit b.
+		return b, nil
+	}
+
+	ptr := t.addr(n) + nodeLeft
+	if nbit >= 0 && key.bit(nbit) != 0 {
+		ptr = t.addr(n) + nodeRight
+	}
+	b, err := t.setChild(nbit, ptr, key, val)
+	if err != nil {
+		return 0, err
+	}
+	if b < 0 {
+		if err := n.unhash(t, pbit); err != nil {
+			return 0, err
+		}
+	}
+	return b, nil
+}
+
+func (t *diskTree) setChild(nbit int, childp addr, key Key, val Val) (int, error) {
+	child, err := t.node(t.addrAt(childp))
+	if err != nil {
+		return 0, err
+	}
+	b, err := child.set(t, nbit, key, val)
+	if err != nil {
+		return 0, err
+	}
+	if nbit < b {
+		n, err := t.newNode()
+		if err != nil {
+			return 0, err
+		}
+		var left, right *diskNode
+		if key.bit(b) == 0 {
+			left, right = n, child
+		} else {
+			left, right = child, n
+		}
+		n.init(t, key, val, b, left, right)
+		if err := t.setAddrAt(childp, t.addr(n)); err != nil {
+			return 0, err
+		}
+		b = -1
+	}
+	return b, nil
+}
+
+// Predict returns the hash of the tree that would result from
+// applying the given changes (sorted by key) to the tree,
+// without modifying the tree.
+func (t *diskTree) Predict(changes []KeyVal) (Hash, error) {
+	t.mmu.RLock()
+	defer t.mmu.RUnlock()
+
+	if t.err != nil {
+		return Hash{}, t.err
+	}
+	if t.hdr().dirty() {
+		return Hash{}, ErrModifiedTree
+	}
+
+	s, list, err := t.predict([]node{}, t.hdr().root(), -1, changes)
+	if err != nil {
+		return Hash{}, err
+	}
+	for _, kv := range list {
+		s = reduce(append(s, node{prefix(kv.Key, 256), hashLeaf(kv.Key, kv.Val)}))
+	}
+	return hashStack(s), nil
+}
+
+// predict calculates the edited tree hash for the subtree at address a.
+func (t *diskTree) predict(s []node, a addr, pbit int, list []KeyVal) ([]node, []KeyVal, error) {
+	if a == 0 {
+		return s, list, nil
+	}
+
+	n, err := t.node(a)
+	if err != nil {
+		return nil, nil, err
+	}
+	key, val, err := n.keyVal(t)
+	if err != nil {
+		return nil, nil, err
+	}
+	nbit := n.bit()
+	bits := nbit
+	if nbit <= pbit {
+		bits = 256
+	}
+	pkey := prefix(key, bits)
+
+	// Stack modifications before node.
+	for len(list) > 0 && prefix(list[0].Key, bits).compare(pkey) < 0 {
+		k, v := list[0].Key, list[0].Val
+		list = list[1:]
+		s = reduce(append(s, node{prefix(k, 256), hashLeaf(k, v)}))
+	}
+
+	// Stack leaf node, possibly replaced.
+	if bits == 256 {
+		if len(list) > 0 && list[0].Key == key {
+			val = list[0].Val
+			list = list[1:]
+		}
+		s = reduce(append(s, node{pkey, hashLeaf(key, val)}))
+		return s, list, nil
+	}
+
+	// Stack entire subtree, if no modifications inside it.
+	if len(list) == 0 || pkey.compare(prefix(list[0].Key, bits)) < 0 {
+		h, err := n.hash(t, pbit)
+		if err != nil {
+			return nil, nil, err
+		}
+		s = reduce(append(s, node{pkey, h}))
+		return s, list, nil
+	}
+
+	// Otherwise, apply modifications within subtree.
+	s, list, err = t.predict(s, n.left(), nbit, list)
+	if err != nil {
+		return nil, nil, err
+	}
+	s, list, err = t.predict(s, n.right(), nbit, list)
+	if err != nil {
+		return nil, nil, err
+	}
+	return s, list, nil
+}
+
+// Prove returns a proof of the presence or absence of key in t.
+func (t *diskTree) Prove(key Key) (Proof, error) {
+	t.mmu.RLock()
+	defer t.mmu.RUnlock()
+
+	if t.err != nil {
+		return nil, t.err
+	}
+	if t.hdr().dirty() {
+		return nil, ErrModifiedTree
+	}
+	root, err := t.node(t.hdr().root())
+	if err != nil {
+		return nil, err
+	}
+	if root == nil {
+		return Proof(proofEmpty), nil
+	}
+	return root.prove(t, -1, key)
+}
+
+func (n *diskNode) prove(t *diskTree, pbit int, key Key) (Proof, error) {
+	nbit := n.bit()
+	if nbit <= pbit {
+		// view n as leaf
+		nkey, nval, err := n.keyVal(t)
+		if err != nil {
+			return nil, err
+		}
+		var p Proof
+		if nkey == key {
+			p = Proof(proofConfirm)
+		} else {
+			p = append(Proof(proofDeny), nkey[:]...)
+		}
+		return append(p, nval[:]...), nil
+	}
+
+	childAddr, sibAddr := n.left(), n.right()
+	if key.bit(nbit) == 1 {
+		childAddr, sibAddr = sibAddr, childAddr
+	}
+	child, err := t.node(childAddr)
+	if err != nil {
+		return nil, err
+	}
+	sib, err := t.node(sibAddr)
+	if err != nil {
+		return nil, err
+	}
+	sibHash, err := sib.hash(t, nbit)
+	if err != nil {
+		return nil, err
+	}
+
+	p, err := child.prove(t, nbit, key)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(p, byte(nbit)), sibHash[:]...), nil
+}
+
+func (t *diskTree) check() {
+	println("check")
+	root, err := t.node(t.hdr().root())
+	if err != nil {
+		panic(err)
+	}
+	if root == nil {
+		return
+	}
+	var sawNil bool
+	h := root.check(t, 1, -1, &sawNil)
+	if h != t.hdr().hash() && !t.hdr().dirty() {
+		fmt.Printf("have %v want %v\n", t.hdr().hash(), h)
+		panic("bad hash")
+	}
+	if !sawNil {
+		panic("lost nil")
+	}
+	println("check OK")
+}
+
+func (n *diskNode) check(t *diskTree, depth, pbit int, sawNil *bool) Hash {
+	if n.bit() == -1 {
+		if *sawNil {
+			panic("multiple nils")
+		}
+		*sawNil = true
+	}
+	if n.bit() <= pbit {
+		// view as leaf
+		nkey, nval, err := n.keyVal(t)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("%*sleaf(%d) %#x %v %v %#x %#x %v dirty=%v\n", depth*2, "", n.bit(), t.addr(n), nkey, nval, n.left(), n.right(), hashLeaf(nkey, nval), n.dirty())
+		return hashLeaf(nkey, nval)
+	}
+	fmt.Printf("%*s%d %#x %#x %#x %v dirty=%v\n", depth*2, "", n.bit(), t.addr(n), n.left(), n.right(), n.ihash(), n.dirty())
+
+	left, err := t.node(n.left())
+	if err != nil {
+		panic(err)
+	}
+	right, err := t.node(n.right())
+	if err != nil {
+		panic(err)
+	}
+	h := hashInner(n.bit(),
+		left.check(t, depth+1, n.bit(), sawNil),
+		right.check(t, depth+1, n.bit(), sawNil))
+	if h != n.ihash() && !n.dirty() {
+		fmt.Printf("%*shave %v want %v\n", depth*2, "", n.ihash(), h)
+		panic("bad hash")
+	}
+	return h
+}
