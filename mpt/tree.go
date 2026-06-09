@@ -285,7 +285,6 @@ var (
 // returning the proved lookup result (val, ok).
 // If the proof is not valid for key in snap, Verify returns a non-nil error.
 func Verify(snap Snapshot, key Key, proof Proof) (val Val, ok bool, err error) {
-	//fmt.Printf("Verify %v %x\n", key, proof)
 	if string(proof) == proofEmpty {
 		if snap.Hash == emptyTreeHash() {
 			return Val{}, false, nil
@@ -330,7 +329,6 @@ func Verify(snap Snapshot, key Key, proof Proof) (val Val, ok bool, err error) {
 // emptyTreeHash returns the parent hash for a root no child nodes.
 func emptyTreeHash() Hash {
 	h := sha256.Sum256(nil)
-	//fmt.Printf("hash0() = %x\n", h)
 	return h
 }
 
@@ -340,7 +338,6 @@ func hashLeaf(key Key, val Val) Hash {
 	copy(kv[:32], key[:])
 	copy(kv[32:64], val[:])
 	h := sha256.Sum256(kv[:])
-	//fmt.Printf("hashLeaf %v %v -> %x\n", key, val, h[:])
 	return h
 }
 
@@ -355,7 +352,6 @@ func hashInner(b int, left, right Hash) Hash {
 	if right == (Hash{}) {
 		panic("zero")
 	}
-	// fmt.Printf("hashInner %v %v %d -> %x\n", left, right, bits, h[:])
 	return h
 }
 

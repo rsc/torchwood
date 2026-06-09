@@ -23,7 +23,6 @@ import (
 	"hash"
 	"io"
 	"log"
-	"runtime/debug"
 	"strings"
 	"time"
 
@@ -216,7 +215,6 @@ type compact struct {
 // errors permanently break all future uses of the memory.
 func (m *Mem) broken(err error) error {
 	if m.err == nil {
-		fmt.Println("BROKEN ", err, " \n", string(debug.Stack()))
 		m.err = err
 	}
 	return err
@@ -474,7 +472,6 @@ func (r *reader) readFrame(data []byte) (int, error) {
 		return 0, err
 	}
 	if id != r.id || seq != r.seq || n > len(data) {
-		//println("BAD seq", seq, r.seq, n, len(data))
 		return 0, errCorrupt
 	}
 	if _, err := r.file.ReadAt(data[:n], r.off); err != nil {
@@ -489,7 +486,6 @@ func (r *reader) readFrame(data []byte) (int, error) {
 	r.off += int64(len(fsum))
 	hsum := r.hash.Sum(r.tmp[hashSize:hashSize])
 	if [hashSize]byte(fsum) != [hashSize]byte(hsum) {
-		//println("BAD hash")
 		return 0, errCorrupt
 	}
 	return n, nil
@@ -537,7 +533,6 @@ func (m *Mem) readFile(r *reader) error {
 // replay applies the mutations listed in patch to m.mem.
 // It expands m.mem as needed to apply the patch.
 func (m *Mem) replay(patch []byte) error {
-	//fmt.Printf("REPLAY\n%s\n", hex.Dump(patch))
 	for len(patch) > 0 {
 		off, n := binary.Uvarint(patch)
 		if n <= 0 {
@@ -551,7 +546,6 @@ func (m *Mem) replay(patch []byte) error {
 			return m.broken(errCorrupt)
 		}
 		patch = patch[n:]
-		//fmt.Printf("AT %#x+%#x\n", off, count)
 		if count > uint64(len(patch)) || off+count < off || int(off+count) < 0 {
 			return m.broken(errCorrupt)
 		}
@@ -725,7 +719,6 @@ func (m *Mem) mutate(off uint64, src []byte, commit func() error) error {
 		}
 	}
 	p := m.ptmp[:0]
-	//fmt.Printf("PATCH @%d %#x+%#x\n", len(m.patch), off, len(src))
 	p = binary.AppendUvarint(p, off)
 	p = binary.AppendUvarint(p, uint64(len(src)))
 	if len(m.patch)+len(p)+len(src)+maxVarint+1 > maxPatch {
@@ -777,7 +770,6 @@ func (m *Mem) flushPatch(needSpace bool) error {
 	if len(p) == 0 {
 		return nil
 	}
-	//fmt.Printf("FLUSH\n%s\n", hex.Dump(p))
 
 	if err := m.writeFrame(m.current, p); err != nil {
 		return err
@@ -791,7 +783,6 @@ func (m *Mem) flushPatch(needSpace bool) error {
 	if m.group >= 0 {
 		m.group = 0
 	}
-	//fmt.Printf("REMAIN\n%s\n", hex.Dump(m.patch))
 	return m.maybeCompact(2 * len(p))
 }
 
@@ -864,7 +855,6 @@ func (m *Mem) writeFrame(w *writer, data []byte) error {
 // maybeCompact runs a bit of compaction if needed,
 // limiting I/O to writing at most n data bytes plus some framing.
 func (m *Mem) maybeCompact(n int) error {
-	//println("MAYBE", m.next.seq, m.current.off, 2*int64(len(m.mem)))
 	if m.next.seq == 0 && m.current.off < 2*int64(len(m.mem)) {
 		// Current disk file is less than twice the tree memory.
 		// Not worth compacting yem.

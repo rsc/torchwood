@@ -164,12 +164,6 @@ func New(file1, file2, file3 File) (Tree, error) {
 	return memOpen(file1, file2, file3, op)
 }
 
-func setActive(f File, b bool) {
-	if f, ok := f.(interface{ setActive(bool) }); ok {
-		f.setActive(b)
-	}
-}
-
 // memOpen is the general implementation of open.
 // op is "create", "open", or "new", indicating the operation
 // being performed on the files; sync indicates whether to

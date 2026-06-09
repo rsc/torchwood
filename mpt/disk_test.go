@@ -91,9 +91,7 @@ type tester struct {
 // A testFile is a single simulated file.
 type testFile struct {
 	memFile
-	tester  *tester
-	sync    int  // offset of last sync; writes only append
-	current bool // whether file is current
+	tester *tester
 }
 
 func (f *testFile) name() string {
@@ -108,36 +106,23 @@ func (f *testFile) name() string {
 	return "???"
 }
 
-func (f *testFile) setCurrent(current bool) {
-	f.current = current
-}
-
 func (f *testFile) clone() *memFile {
 	return &memFile{readOnly: true, data: bytes.Clone(f.data)}
 }
 
 // WriteAt writes to the test file.
 func (f *testFile) WriteAt(data []byte, off int64) (int, error) {
-	// Writes to the current file should only ever append;
-	// not overwriting is part of our reliability story.
-	// Writes to the next file can be scattered, because
-	// we are writing the tree interleaved with new patches.
-	if f.current && off != int64(len(f.data)) {
-		return 0, fmt.Errorf("non-appending write\n\n%s", debug.Stack())
-	}
 	f.tester.t.Logf("%s write %#x+%#x = %#x", f.name(), off, len(data), off+int64(len(data)))
 	return f.memFile.WriteAt(data, off)
 }
 
 // Sync syncs the test file.
-// Now bytes before the current offset cannot be lost or corrupted.
 func (f *testFile) Sync() error {
 	if f.tester == nil {
 		panic("sync of read-only file")
 	}
 
-	f.sync = len(f.data)
-	f.tester.t.Logf("%s sync at %#x", f.name(), f.sync)
+	f.tester.t.Logf("%s sync at %#x", f.name(), len(f.data))
 	return nil
 }
 

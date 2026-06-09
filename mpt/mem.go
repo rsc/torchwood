@@ -16,7 +16,6 @@ type memTree struct {
 	root    *memNode // root node
 	hash    Hash     // overall tree hash
 	dirty   bool     // Set called without Snap
-	nodes   int      // number of nodes in tree
 	err     error    // sticky error condition
 }
 
@@ -109,7 +108,7 @@ func (t *memTree) Snap(version int64) (Snapshot, error) {
 	}
 	if t.root != nil {
 		t.hash = t.root.rehash(-1)
-		// t.check()
+		_ = t.check // t.check()
 	}
 	t.exact = true
 	return Snapshot{t.version, t.hash}, nil
@@ -129,7 +128,7 @@ func (t *memTree) Set(key Key, val Val) error {
 			panic("bad add")
 		}
 	}
-	// t.check()
+	_ = t.check // t.check()
 	return nil
 }
 

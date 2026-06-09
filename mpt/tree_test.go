@@ -368,7 +368,6 @@ func BenchmarkSet1K_10M(b *testing.B) {
 }
 
 func benchmarkSet(b *testing.B, tree Tree, n, treeSize int) {
-	println("make", treeSize)
 	var todo [][2]Hash
 	for i := range n {
 		todo = append(todo, [2]Hash{sha(v(i)), Hash(v(i))})

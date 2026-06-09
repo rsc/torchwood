@@ -75,7 +75,7 @@ func (t *diskTree) Snap(version int64) (Snapshot, error) {
 	if err := t.snap(version); err != nil {
 		return Snapshot{}, err
 	}
-	// t.check()
+	_ = t.check // t.check()
 	return Snapshot{t.hdr().version(), t.hdr().hash()}, nil
 }
 
@@ -174,7 +174,7 @@ func (t *diskTree) Set(key Key, val Val) error {
 			return err
 		}
 	}
-	// t.check()
+	_ = t.check // t.check()
 	return nil
 }
 
