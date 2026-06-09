@@ -63,7 +63,12 @@ func (s *Span) Release() error {
 		if err := unix.Mprotect(s.mem[:s.alloc], unix.PROT_NONE); err != nil {
 			return fmt.Errorf("span.Release: mprotect: %w", err)
 		}
-		if err := unix.Madvise(s.mem[:s.alloc], unix.MADV_FREE); err != nil {
+		err := unix.Madvise(s.mem[:s.alloc], unix.MADV_FREE)
+		if err == unix.EINVAL {
+			// MADV_FREE is missing before Linux 4.5 and in gVisor.
+			err = unix.Madvise(s.mem[:s.alloc], unix.MADV_DONTNEED)
+		}
+		if err != nil {
 			return fmt.Errorf("span.Release: madvise: %w", err)
 		}
 	}
