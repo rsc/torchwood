@@ -5,7 +5,6 @@ go 1.25.0
 require (
 	filippo.io/age v1.3.1
 	filippo.io/mostly-harmless/vrf-r255 v0.0.0-20260605095812-d3620d7874c5
-	github.com/cheggaaa/pb/v3 v3.1.7
 	github.com/rogpeppe/go-internal v1.15.0
 	github.com/transparency-dev/tessera v1.0.2
 	golang.org/x/crypto v0.53.0
@@ -21,21 +20,16 @@ require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	filippo.io/hpke v0.4.0 // indirect
 	filippo.io/mldsa v0.0.0-20260215214346-43d0283efc3e // indirect
-	github.com/VividCortex/ewma v1.2.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/fatih/color v1.19.0 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gtank/ristretto255 v0.2.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
-	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
-	github.com/mattn/go-runewidth v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/transparency-dev/formats v0.1.1 // indirect
